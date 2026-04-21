@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # Serveur Asterisk PABX
   asterisk:
-    image: andrius/asterisk:alpine  # Image Asterisk légère basée sur Alpine
+    image: andrius/asterisk:latest  # Image Asterisk officielle
     container_name: pabx_asterisk
     network_mode: "host"  # Recommandé pour simplifier le NAT et le RTP avec le SIP (Zadarma)
     volumes:
