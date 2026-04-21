@@ -29,7 +29,7 @@ SILENCE_DURATION_FRAMES = 75
 
 # Clients
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-mongo_client = MongoClient(os.getenv("MONGO_URI", "mongodb+srv://benjtap:8Brach0t-@cluster0.qbitr0w.mongodb.net/"))
+mongo_client = MongoClient(os.getenv("MONGO_URI"))
 db = mongo_client["leader_db"]
 
 SYSTEM_PROMPT = """Tu es l'assistant vocal intelligent de Leader. 
