@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  # Serveur Asterisk PABX
+  asterisk:
+    image: andrius/asterisk:alpine  # Image Asterisk légère basée sur Alpine
+    container_name: pabx_asterisk
+    network_mode: "host"  # Recommandé pour simplifier le NAT et le RTP avec le SIP (Zadarma)
+    volumes:
+      - ./asterisk/config/pjsip.conf:/etc/asterisk/pjsip.conf
+      - ./asterisk/config/extensions.conf:/etc/asterisk/extensions.conf
+      - ./asterisk/sounds:/var/lib/asterisk/sounds
+    restart: unless-stopped
+
+  # Backend IA Python (Agent Vocal)
+  voice_agent:
+    build: ./agent
+    container_name: pabx_voice_agent
+    network_mode: "host" 
+    volumes:
+      - ./agent:/app
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - STT_PROVIDER=openai  # ou google, etc.
+      - TTS_PROVIDER=openai  # ou gtts, elevenlabs, etc.
+    restart: unless-stopped

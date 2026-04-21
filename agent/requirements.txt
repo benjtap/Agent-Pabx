@@ -1,0 +1,6 @@
+openai
+python-dotenv
+pydub
+pymongo
+requests
+asyncio
