@@ -18,10 +18,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VoiceAgent")
 
 # --- CONFIGURATION ---
-KIND_HANGUP = 0x00
-KIND_ID = 0x01
-KIND_AUDIO = 0x10
-KIND_ERROR = 0xff
+KIND_ERROR = 0x03
+KIND_HANGUP = 0x02
+KIND_AUDIO = 0x01
+KIND_ID = 0x04
 
 SAMPLE_RATE = 8000
 SILENCE_THRESHOLD = 500
@@ -101,7 +101,7 @@ def compute_rms(pcm_data: bytes) -> float:
     return math.sqrt(sum_sq / count)
 
 async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamWriter, chat_history: list):
-    logger.info(f"Traitement audio ({len(audio_buffer)} bytes)...")
+    logger.info(f"Analyse audio de {len(audio_buffer)} bytes...")
     
     # 1. STT
     wav_io = io.BytesIO()
@@ -153,7 +153,7 @@ async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamW
         else:
             bot_text = message.content
 
-        logger.info(f"Agent: {bot_text}")
+        logger.info(f"Agent répond: {bot_text}")
         chat_history.append({"role": "assistant", "content": bot_text})
     except Exception as e:
         logger.error(f"LLM Error: {e}"); bot_text = "Désolé, j'ai une petite erreur."
@@ -171,6 +171,8 @@ async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamW
             writer.write(struct.pack(">BH", KIND_AUDIO, len(chunk)) + chunk)
             await writer.drain()
             await asyncio.sleep(0.018)
+    except (ConnectionResetError, BrokenPipeError):
+        logger.error("ERREUR Pipeline: Connection lost")
     except asyncio.CancelledError:
         logger.info("TTS interrompu.")
     except Exception as e:
@@ -178,40 +180,49 @@ async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamW
 
 async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     addr = writer.get_extra_info('peername')
-    logger.info(f"Connection from {addr}")
+    logger.info("NOUVEL APPEL RECU")
     
     chat_history = [{"role": "system", "content": SYSTEM_PROMPT}]
     audio_buffer, silence_frames, is_speaking = bytearray(), 0, False
     current_response_task = None
     
     try:
-        kind = await reader.readexactly(1)
-        if kind[0] == KIND_ID:
-            uuid_bytes = await reader.readexactly(16) # Non utilisé ici
-            
         while True:
-            kind_bytes = await reader.readexactly(1)
-            kind_val = kind_bytes[0]
-            if kind_val == KIND_HANGUP: break
+            # Lire 3 octets: Kind (1) + Length (2)
+            header = await reader.readexactly(3)
+            kind_val, payload_len = struct.unpack(">BH", header)
+            
+            if kind_val == KIND_HANGUP:
+                logger.info("Appel terminé (Hangup)")
+                break
+                
+            payload = await reader.readexactly(payload_len)
+            
+            if kind_val == KIND_ID:
+                logger.info(f"ID Reçu: {payload.hex()}")
+                continue
                 
             if kind_val == KIND_AUDIO:
-                payload_len = struct.unpack(">H", await reader.readexactly(2))[0]
-                audio_chunk = await reader.readexactly(payload_len)
-                rms = compute_rms(audio_chunk)
-                
+                rms = compute_rms(payload)
                 if rms > SILENCE_THRESHOLD:
                     if current_response_task and not current_response_task.done():
                         current_response_task.cancel()
                     is_speaking, silence_frames = True, 0
-                    audio_buffer.extend(audio_chunk)
+                    audio_buffer.extend(payload)
                 else:
                     if is_speaking:
-                        audio_buffer.extend(audio_chunk)
+                        audio_buffer.extend(payload)
                         silence_frames += 1
                         if silence_frames > SILENCE_DURATION_FRAMES:
                             current_response_task = asyncio.create_task(process_audio_and_respond(bytes(audio_buffer), writer, chat_history))
                             audio_buffer, is_speaking, silence_frames = bytearray(), False, 0
-            else: break
+            elif kind_val == KIND_ERROR:
+                logger.error("Erreur reçue d'AudioSocket")
+                break
+    except asyncio.IncompleteReadError:
+        logger.info("Connexion fermée par le client.")
+    except (ConnectionResetError, BrokenPipeError):
+        logger.error("ERREUR Pipeline: Connection lost")
     finally:
         writer.close()
 
