@@ -220,7 +220,8 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
                 rms = compute_rms(payload)
                 if rms > SILENCE_THRESHOLD:
                     if current_response_task and not current_response_task.done():
-                        current_response_task.cancel()
+                        logger.info(f"Bruit ignoré pendant la réponse (RMS: {rms})")
+                        # current_response_task.cancel() # Désactivé temporairement pour éviter les coupures
                     is_speaking, silence_frames = True, 0
                     audio_buffer.extend(payload)
                 else:
