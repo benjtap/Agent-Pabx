@@ -18,10 +18,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VoiceAgent")
 
 # --- CONFIGURATION ---
-KIND_ERROR = 0x03
-KIND_HANGUP = 0x02
-KIND_AUDIO = 0x01
-KIND_ID = 0x04
+KIND_HANGUP = 0x00
+KIND_ID = 0x01
+KIND_AUDIO = 0x10
+KIND_ERROR = 0xff
 
 SAMPLE_RATE = 8000
 SILENCE_THRESHOLD = 500
