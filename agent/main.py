@@ -18,10 +18,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VoiceAgent")
 
 # --- CONFIGURATION ---
-KIND_ERROR = 0x03
-KIND_HANGUP = 0x02
-KIND_AUDIO = 0x01
-KIND_ID = 0x04
+KIND_HANGUP = 0x00
+KIND_ID = 0x01
+KIND_AUDIO = 0x10
+KIND_ERROR = 0xff
 
 SAMPLE_RATE = 8000
 SILENCE_THRESHOLD = 500
@@ -187,22 +187,25 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
     current_response_task = None
     
     try:
+        # Premier octet de la connexion (souvent KIND_ID)
+        initial_kind = await reader.readexactly(1)
+        if initial_kind[0] == KIND_ID:
+            await reader.readexactly(16) # Le UUID fait 16 octets sans header de longueur dans ce setup
+            
         while True:
-            # Lire 3 octets: Kind (1) + Length (2)
-            header = await reader.readexactly(3)
-            kind_val, payload_len = struct.unpack(">BH", header)
+            kind_byte = await reader.readexactly(1)
+            kind_val = kind_byte[0]
             
             if kind_val == KIND_HANGUP:
                 logger.info("Appel terminé (Hangup)")
                 break
                 
-            payload = await reader.readexactly(payload_len)
-            
-            if kind_val == KIND_ID:
-                logger.info(f"ID Reçu: {payload.hex()}")
-                continue
-                
             if kind_val == KIND_AUDIO:
+                # Pour l'audio, on lit la longueur sur 2 octets
+                header_len = await reader.readexactly(2)
+                payload_len = struct.unpack(">H", header_len)[0]
+                payload = await reader.readexactly(payload_len)
+                
                 rms = compute_rms(payload)
                 if rms > SILENCE_THRESHOLD:
                     if current_response_task and not current_response_task.done():
@@ -218,6 +221,10 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
                             audio_buffer, is_speaking, silence_frames = bytearray(), False, 0
             elif kind_val == KIND_ERROR:
                 logger.error("Erreur reçue d'AudioSocket")
+                break
+            else:
+                # Kind inconnu ou inattendu, on arrête pour éviter de désynchroniser le flux
+                logger.warning(f"Kind inconnu reçu: {kind_val}")
                 break
     except asyncio.IncompleteReadError:
         logger.info("Connexion fermée par le client.")
