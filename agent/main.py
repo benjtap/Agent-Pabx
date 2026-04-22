@@ -163,8 +163,13 @@ async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamW
         audio_stream = await client.audio.speech.create(model="tts-1", voice="alloy", input=bot_text, response_format="mp3")
         audio_segment = pydub.AudioSegment.from_mp3(io.BytesIO(audio_stream.content))
         audio_segment = audio_segment.set_frame_rate(SAMPLE_RATE).set_channels(1).set_sample_width(2)
-        raw_pcm = audio_segment.raw_data
-        logger.info(f"Audio TTS généré : {len(raw_pcm)} bytes")
+        
+        # Exporter explicitement en s16le (Signed 16-bit Little Endian) = SLIN Asterisk
+        raw_io = io.BytesIO()
+        audio_segment.export(raw_io, format="s16le")
+        raw_pcm = raw_io.getvalue()
+        
+        logger.info(f"Audio TTS généré : {len(raw_pcm)} bytes (Format SLIN Asterisk)")
         
         chunk_size = 320
         for i in range(0, len(raw_pcm), chunk_size):
