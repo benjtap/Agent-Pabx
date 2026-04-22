@@ -24,8 +24,8 @@ KIND_AUDIO = 0x10
 KIND_ERROR = 0xff
 
 SAMPLE_RATE = 8000
-SILENCE_THRESHOLD = 500
-SILENCE_DURATION_FRAMES = 75
+SILENCE_THRESHOLD = 2000
+SILENCE_DURATION_FRAMES = 100
 
 # Clients
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -164,13 +164,22 @@ async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamW
         audio_segment = pydub.AudioSegment.from_mp3(io.BytesIO(audio_stream.content))
         audio_segment = audio_segment.set_frame_rate(SAMPLE_RATE).set_channels(1).set_sample_width(2)
         raw_pcm = audio_segment.raw_data
+        logger.info(f"Audio TTS généré : {len(raw_pcm)} bytes")
         
         chunk_size = 320
         for i in range(0, len(raw_pcm), chunk_size):
             chunk = raw_pcm[i:i+chunk_size]
-            writer.write(struct.pack(">BH", KIND_AUDIO, len(chunk)) + chunk)
+            # Assurer que le chunk fait exactement la taille attendue si on est à la fin (padding avec des zéros)
+            if len(chunk) < chunk_size:
+                chunk += b'\x00' * (chunk_size - len(chunk))
+            
+            # Format: KIND (1 byte) + Length (2 bytes Big Endian) + Audio Payload (320 bytes)
+            header = struct.pack(">BH", KIND_AUDIO, len(chunk))
+            writer.write(header + chunk)
             await writer.drain()
-            await asyncio.sleep(0.018)
+            # Délai 20ms pour Asterisk
+            await asyncio.sleep(0.020)
+        logger.info("Fin de la transmission audio")
     except (ConnectionResetError, BrokenPipeError):
         logger.error("ERREUR Pipeline: Connection lost")
     except asyncio.CancelledError:
