@@ -12,6 +12,7 @@ from openai import AsyncOpenAI
 import pydub
 from pymongo import MongoClient
 from bson import ObjectId
+from datetime import datetime
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -35,6 +36,7 @@ db = mongo_client["leader_db"]
 SYSTEM_PROMPT = """Tu es l'assistant vocal intelligent de Leader. 
 Tes réponses doivent être TRÈS courtes, naturelles et chaleureuses. 
 Tu peux vérifier les stocks de médicaments dans les pharmacies Meuhedet.
+Tu gères également un service de taxi. Si le client veut un taxi, demande-lui sa destination puis utilise l'outil pour envoyer la commande aux chauffeurs. Le numéro de téléphone est déjà enregistré.
 Si tu as besoin de faire une recherche, utilise les outils à ta disposition.
 Ne lis pas d'adresses complètes ou de longs IDs au téléphone, donne juste l'essentiel."""
 
@@ -73,6 +75,22 @@ def get_caller_identity(phone: str):
         return contact.get("name", "client")
     return "client"
 
+def internal_order_taxi(destination: str, caller_number: str):
+    """Enregistre la commande de taxi dans la base de données."""
+    try:
+        order = {
+            "type": "taxi_order",
+            "destination": destination,
+            "caller_number": caller_number,
+            "status": "pending",
+            "created_at": datetime.utcnow().isoformat()
+        }
+        db["taxi_orders"].insert_one(order)
+        return f"La commande de taxi pour la destination {destination} a été envoyée avec succès pour le numéro {caller_number}."
+    except Exception as e:
+        logger.error(f"Erreur outil taxi: {e}")
+        return "Je rencontre une difficulté technique pour commander le taxi."
+
 TOOLS_DEFINITION = [
     {
         "type": "function",
@@ -88,6 +106,20 @@ TOOLS_DEFINITION = [
                 "required": ["medicine_name"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "order_taxi",
+            "description": "Commande un taxi pour le client en enregistrant sa destination.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "destination": {"type": "string", "description": "L'adresse ou le lieu de destination du client."}
+                },
+                "required": ["destination"]
+            }
+        }
     }
 ]
 
@@ -100,7 +132,7 @@ def compute_rms(pcm_data: bytes) -> float:
     sum_sq = sum(s * s for s in shorts)
     return math.sqrt(sum_sq / count)
 
-async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamWriter, chat_history: list):
+async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamWriter, chat_history: list, caller_number: str):
     logger.info(f"Analyse audio de {len(audio_buffer)} bytes...")
     
     # 1. STT
@@ -144,6 +176,15 @@ async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamW
                         "tool_call_id": tool_call.id,
                         "role": "tool",
                         "name": "check_pharmacy_stock",
+                        "content": result
+                    })
+                elif tool_call.function.name == "order_taxi":
+                    result = internal_order_taxi(args.get("destination"), caller_number)
+                    chat_history.append(message)
+                    chat_history.append({
+                        "tool_call_id": tool_call.id,
+                        "role": "tool",
+                        "name": "order_taxi",
                         "content": result
                     })
             
@@ -199,6 +240,7 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
     chat_history = [{"role": "system", "content": SYSTEM_PROMPT}]
     audio_buffer, silence_frames, is_speaking = bytearray(), 0, False
     current_response_task = None
+    caller_number = "Inconnu"
     
     try:
         while True:
@@ -213,7 +255,16 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
                 break
                 
             if kind_val == KIND_ID:
-                # UUID reçu, on peut le loguer si besoin
+                import uuid
+                call_id_obj = uuid.UUID(bytes=payload)
+                call_id_str = str(call_id_obj)
+                # L'UUID a été formaté avec le numéro à la fin
+                num = call_id_str.split("-")[-1].lstrip("0")
+                if num:
+                    caller_number = num
+                logger.info(f"Appel reçu, UUID: {call_id_str}, Numéro: {caller_number}")
+                
+                chat_history[0]["content"] += f"\nLe numéro de téléphone du client appelant est : {caller_number}."
                 continue
                 
             if kind_val == KIND_AUDIO:
@@ -229,7 +280,7 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
                         audio_buffer.extend(payload)
                         silence_frames += 1
                         if silence_frames > SILENCE_DURATION_FRAMES:
-                            current_response_task = asyncio.create_task(process_audio_and_respond(bytes(audio_buffer), writer, chat_history))
+                            current_response_task = asyncio.create_task(process_audio_and_respond(bytes(audio_buffer), writer, chat_history, caller_number))
                             audio_buffer, is_speaking, silence_frames = bytearray(), False, 0
             elif kind_val == KIND_ERROR:
                 logger.error("Erreur reçue d'AudioSocket")
