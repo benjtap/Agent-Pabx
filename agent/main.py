@@ -77,8 +77,8 @@ def get_caller_identity(phone: str):
 def internal_order_taxi(destination: str, caller_number: str):
     """Appelle l'API LeaderAPI pour créer une requête de taxi et déclencher le scoring."""
     try:
-        # On appelle l'API locale (sur le port 5000 car network_mode: host)
-        api_url = "http://localhost:5000/api/taxi/request"
+        # On appelle l'API locale (sur le port 8081 car network_mode: host + leaderapi port mapping)
+        api_url = "http://localhost:8081/api/taxi/request"
         payload = {
             "clientPhone": caller_number,
             "address": destination
