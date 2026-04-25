@@ -33,12 +33,11 @@ client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 mongo_client = MongoClient(os.getenv("MONGO_URI"))
 db = mongo_client["leader_db"]
 
-SYSTEM_PROMPT = """Tu es l'assistant vocal intelligent de Leader. 
-Tes réponses doivent être TRÈS courtes, naturelles et chaleureuses. 
-Tu peux vérifier les stocks de médicaments dans les pharmacies Meuhedet.
-Tu gères également un service de taxi. Si le client veut un taxi, demande-lui sa destination puis utilise l'outil pour envoyer la commande aux chauffeurs. Le numéro de téléphone est déjà enregistré.
-Si tu as besoin de faire une recherche, utilise les outils à ta disposition.
-Ne lis pas d'adresses complètes ou de longs IDs au téléphone, donne juste l'essentiel."""
+SYSTEM_PROMPT = """אתה עוזר קולי אינטליגנטי של Leader Taxi. 
+תשובותיך צריכות להיות קצרות מאוד, טבעיות וחמות. 
+אתה מטפל בשירות מוניות. אם הלקוח רוצה מונית, בקש ממנו את הכתובת המדויקת של האיסוף. 
+ברגע שיש לך את הכתובת, השתמש בכלי 'order_taxi' כדי לשלוח את ההזמנה. 
+אל תקרא כתובות מלאות או מזהים ארוכים בטלפון, תן רק את העיקר."""
 
 # --- OUTILS MÉTIER (TOOLS) ---
 
@@ -76,20 +75,25 @@ def get_caller_identity(phone: str):
     return "client"
 
 def internal_order_taxi(destination: str, caller_number: str):
-    """Enregistre la commande de taxi dans la base de données."""
+    """Appelle l'API LeaderAPI pour créer une requête de taxi et déclencher le scoring."""
     try:
-        order = {
-            "type": "taxi_order",
-            "destination": destination,
-            "caller_number": caller_number,
-            "status": "pending",
-            "created_at": datetime.utcnow().isoformat()
+        # On appelle l'API locale (sur le port 5000 car network_mode: host)
+        api_url = "http://localhost:5000/api/taxi/request"
+        payload = {
+            "clientPhone": caller_number,
+            "address": destination
         }
-        db["taxi_orders"].insert_one(order)
-        return f"La commande de taxi pour la destination {destination} a été envoyée avec succès pour le numéro {caller_number}."
+        logger.info(f"Envoi de la commande à {api_url} pour {destination}")
+        r = requests.post(api_url, json=payload, timeout=10)
+        
+        if r.status_code == 200:
+            return f"הזמנת המונית לכתובת {destination} נשלחה בהצלחה. נהג יצור איתך קשר בהקדם."
+        else:
+            logger.error(f"API Error: {r.status_code} - {r.text}")
+            return "מצטער, חלה שגיאה בחיבור למערכת ההזמנות."
     except Exception as e:
         logger.error(f"Erreur outil taxi: {e}")
-        return "Je rencontre une difficulté technique pour commander le taxi."
+        return "מצטער, אני נתקל בקושי טכני בהזמנת המונית."
 
 TOOLS_DEFINITION = [
     {
@@ -132,6 +136,33 @@ def compute_rms(pcm_data: bytes) -> float:
     sum_sq = sum(s * s for s in shorts)
     return math.sqrt(sum_sq / count)
 
+async def send_tts(text: str, writer: asyncio.StreamWriter):
+    """Génère le TTS et l'envoie via AudioSocket."""
+    try:
+        audio_stream = await client.audio.speech.create(model="tts-1", voice="alloy", input=text, response_format="mp3")
+        audio_segment = pydub.AudioSegment.from_mp3(io.BytesIO(audio_stream.content))
+        audio_segment = audio_segment.set_frame_rate(SAMPLE_RATE).set_channels(1).set_sample_width(2)
+        
+        raw_io = io.BytesIO()
+        audio_segment.export(raw_io, format="s16le")
+        raw_pcm = raw_io.getvalue()
+        
+        logger.info(f"Audio TTS généré : {len(raw_pcm)} bytes")
+        
+        chunk_size = 320
+        for i in range(0, len(raw_pcm), chunk_size):
+            chunk = raw_pcm[i:i+chunk_size]
+            if len(chunk) < chunk_size:
+                chunk += b'\x00' * (chunk_size - len(chunk))
+            
+            header = struct.pack(">BH", KIND_AUDIO, len(chunk))
+            writer.write(header + chunk)
+            await writer.drain()
+            await asyncio.sleep(0.020)
+        logger.info("Fin de la transmission audio")
+    except Exception as e:
+        logger.error(f"TTS Error: {e}")
+
 async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamWriter, chat_history: list, caller_number: str):
     logger.info(f"Analyse audio de {len(audio_buffer)} bytes...")
     
@@ -144,7 +175,7 @@ async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamW
     wav_io.seek(0)
     
     try:
-        transcript = await client.audio.transcriptions.create(model="whisper-1", file=wav_io, language="fr")
+        transcript = await client.audio.transcriptions.create(model="whisper-1", file=wav_io, language="he")
         user_text = transcript.text
         if len(user_text.strip()) < 2: return
         logger.info(f"User: {user_text}")
@@ -197,41 +228,10 @@ async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamW
         logger.info(f"Agent répond: {bot_text}")
         chat_history.append({"role": "assistant", "content": bot_text})
     except Exception as e:
-        logger.error(f"LLM Error: {e}"); bot_text = "Désolé, j'ai une petite erreur."
+        logger.error(f"LLM Error: {e}"); bot_text = "מצטער, חלה שגיאה."
 
     # 3. TTS
-    try:
-        audio_stream = await client.audio.speech.create(model="tts-1", voice="alloy", input=bot_text, response_format="mp3")
-        audio_segment = pydub.AudioSegment.from_mp3(io.BytesIO(audio_stream.content))
-        audio_segment = audio_segment.set_frame_rate(SAMPLE_RATE).set_channels(1).set_sample_width(2)
-        
-        # Exporter explicitement en s16le (Signed 16-bit Little Endian) = SLIN Asterisk
-        raw_io = io.BytesIO()
-        audio_segment.export(raw_io, format="s16le")
-        raw_pcm = raw_io.getvalue()
-        
-        logger.info(f"Audio TTS généré : {len(raw_pcm)} bytes (Format SLIN Asterisk)")
-        
-        chunk_size = 320
-        for i in range(0, len(raw_pcm), chunk_size):
-            chunk = raw_pcm[i:i+chunk_size]
-            # Assurer que le chunk fait exactement la taille attendue si on est à la fin (padding avec des zéros)
-            if len(chunk) < chunk_size:
-                chunk += b'\x00' * (chunk_size - len(chunk))
-            
-            # Format: KIND (1 byte) + Length (2 bytes Big Endian) + Audio Payload (320 bytes)
-            header = struct.pack(">BH", KIND_AUDIO, len(chunk))
-            writer.write(header + chunk)
-            await writer.drain()
-            # Délai 20ms pour Asterisk
-            await asyncio.sleep(0.020)
-        logger.info("Fin de la transmission audio")
-    except (ConnectionResetError, BrokenPipeError):
-        logger.error("ERREUR Pipeline: Connection lost")
-    except asyncio.CancelledError:
-        logger.info("TTS interrompu.")
-    except Exception as e:
-        logger.error(f"TTS Error: {e}")
+    await send_tts(bot_text, writer)
 
 async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     addr = writer.get_extra_info('peername')
@@ -265,6 +265,11 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
                 logger.info(f"Appel reçu, UUID: {call_id_str}, Numéro: {caller_number}")
                 
                 chat_history[0]["content"] += f"\nLe numéro de téléphone du client appelant est : {caller_number}."
+                
+                # Greeting in Hebrew
+                greeting = "שלום, לאן תרצה להזמין מונית?"
+                chat_history.append({"role": "assistant", "content": greeting})
+                asyncio.create_task(send_tts(greeting, writer))
                 continue
                 
             if kind_val == KIND_AUDIO:

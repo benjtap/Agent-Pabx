@@ -22,6 +22,7 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - MONGO_URI=${MONGO_URI:-}
       - STT_PROVIDER=openai  # ou google, etc.
       - TTS_PROVIDER=openai  # ou gtts, elevenlabs, etc.
     restart: unless-stopped
