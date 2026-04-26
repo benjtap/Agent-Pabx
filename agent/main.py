@@ -34,13 +34,13 @@ client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 mongo_client = MongoClient(os.getenv("MONGO_URI"))
 db = mongo_client["leader_db"]
 
-SYSTEM_PROMPT = """אתה עוזר קולי של Leader Taxi. 
-אל תעשה שיחות חולין. היה ישיר ומהיר מאוד.
-תפקידך לקבל את הפרטים הבאים בלבד:
-1. עיר וכתובת איסוף.
-2. עיר וכתובת יעד.
-שאל ישירות על העיר והכתובת. ברגע שיש לך אותם, השתמש בכלי 'order_taxi' וסיים את השיחה.
-אל תחזור על הכתובות המלאות, פשוט בצע את ההזמנה."""
+SYSTEM_PROMPT = """אתה מוקדן שירות במוקד Leader Taxi. 
+עליך להיות מקצועי, ענייני ומהיר מאוד. הלקוחות רוצים להזמין מונית במינימום זמן.
+פעל לפי השלבים הבאים:
+1. שאל "מאיפה האיסוף?" (עיר ורחוב).
+2. שאל "ולאן היעד?" (עיר ורחוב).
+אל תבזבז זמן על שיחות חולין.
+ברגע שיש לך את כל הפרטים (מוצא ויעד), השתמש בכלי 'order_taxi' כדי לבצע את ההזמנה וסיים את השיחה באישור קצר."""
 
 # --- OUTILS MÉTIER (TOOLS) ---
 
@@ -292,7 +292,7 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
                 chat_history[0]["content"] += f"\nLe numéro de téléphone du client appelant est : {caller_number}."
                 
                 # Greeting in Hebrew
-                greeting = "שלום, לאן תרצה להזמין מונית?"
+                greeting = "מוקד לידר טקסי שלום, מאיפה לאסוף אותך ולאן היעד?"
                 chat_history.append({"role": "assistant", "content": greeting})
                 asyncio.create_task(send_tts(greeting, writer))
                 continue
