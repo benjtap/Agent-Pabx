@@ -13,6 +13,7 @@ import pydub
 from pymongo import MongoClient
 from bson import ObjectId
 from datetime import datetime
+import edge_tts
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -35,8 +36,11 @@ db = mongo_client["leader_db"]
 
 SYSTEM_PROMPT = """אתה עוזר קולי אינטליגנטי של Leader Taxi. 
 תשובותיך צריכות להיות קצרות מאוד, טבעיות וחמות. 
-אתה מטפל בשירות מוניות. אם הלקוח רוצה מונית, בקש ממנו את הכתובת המדויקת של האיסוף. 
-ברגע שיש לך את הכתובת, השתמש בכלי 'order_taxi' כדי לשלוח את ההזמנה. 
+אתה מטפל בשירות מוניות. כדי להזמין מונית, עליך לוודא שיש לך את הפרטים הבאים:
+1. עיר וכתובת איסוף (מוצא).
+2. עיר וכתובת יעד.
+בקש מהלקוח את הפרטים הללו בצורה ברורה.
+ברגע שיש לך את כל הפרטים, השתמש בכלי 'order_taxi' כדי לשלוח את ההזמנה. 
 אל תקרא כתובות מלאות או מזהים ארוכים בטלפון, תן רק את העיקר."""
 
 # --- OUTILS MÉTIER (TOOLS) ---
@@ -74,20 +78,23 @@ def get_caller_identity(phone: str):
         return contact.get("name", "client")
     return "client"
 
-def internal_order_taxi(destination: str, caller_number: str):
+def internal_order_taxi(origin_city: str, origin_address: str, destination_city: str, destination_address: str, caller_number: str):
     """Appelle l'API LeaderAPI pour créer une requête de taxi et déclencher le scoring."""
     try:
         # On appelle l'API locale (sur le port 8081 car network_mode: host + leaderapi port mapping)
         api_url = "http://localhost:8081/api/taxi/request"
         payload = {
             "clientPhone": caller_number,
-            "address": destination
+            "originCity": origin_city,
+            "originAddress": origin_address,
+            "destinationCity": destination_city,
+            "destinationAddress": destination_address
         }
-        logger.info(f"Envoi de la commande à {api_url} pour {destination}")
+        logger.info(f"Envoi de la commande à {api_url} de {origin_address}, {origin_city} vers {destination_address}, {destination_city}")
         r = requests.post(api_url, json=payload, timeout=10)
         
         if r.status_code == 200:
-            return f"הזמנת המונית לכתובת {destination} נשלחה בהצלחה. נהג יצור איתך קשר בהקדם."
+            return f"הזמנת המונית מ{origin_address} ב{origin_city} ל{destination_address} ב{destination_city} נשלחה בהצלחה. נהג יצור איתך קשר בהקדם."
         else:
             logger.error(f"API Error: {r.status_code} - {r.text}")
             return "מצטער, חלה שגיאה בחיבור למערכת ההזמנות."
@@ -115,13 +122,16 @@ TOOLS_DEFINITION = [
         "type": "function",
         "function": {
             "name": "order_taxi",
-            "description": "Commande un taxi pour le client en enregistrant sa destination.",
+            "description": "Commande un taxi pour le client en enregistrant son point de départ et sa destination.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "destination": {"type": "string", "description": "L'adresse ou le lieu de destination du client."}
+                    "origin_city": {"type": "string", "description": "La ville de départ (ex: Ashdod, Jérusalem)."},
+                    "origin_address": {"type": "string", "description": "L'adresse précise de départ."},
+                    "destination_city": {"type": "string", "description": "La ville de destination."},
+                    "destination_address": {"type": "string", "description": "L'adresse précise de destination."}
                 },
-                "required": ["destination"]
+                "required": ["origin_city", "origin_address", "destination_city", "destination_address"]
             }
         }
     }
@@ -137,17 +147,27 @@ def compute_rms(pcm_data: bytes) -> float:
     return math.sqrt(sum_sq / count)
 
 async def send_tts(text: str, writer: asyncio.StreamWriter):
-    """Génère le TTS et l'envoie via AudioSocket."""
+    """Génère le TTS avec un accent israélien natif (edge-tts) et l'envoie via AudioSocket."""
     try:
-        audio_stream = await client.audio.speech.create(model="tts-1", voice="alloy", input=text, response_format="mp3")
-        audio_segment = pydub.AudioSegment.from_mp3(io.BytesIO(audio_stream.content))
+        # Utilisation de edge-tts pour un accent hébreu natif sans accent américain
+        VOICE = "he-IL-AvriNeural" # "he-IL-HilaNeural" pour une voix féminine
+        communicate = edge_tts.Communicate(text, VOICE)
+        
+        # On récupère l'audio en mémoire
+        audio_data = b""
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_data += chunk["data"]
+
+        # Conversion via pydub pour correspondre au format AudioSocket (8000Hz, Mono, S16LE)
+        audio_segment = pydub.AudioSegment.from_mp3(io.BytesIO(audio_data))
         audio_segment = audio_segment.set_frame_rate(SAMPLE_RATE).set_channels(1).set_sample_width(2)
         
         raw_io = io.BytesIO()
         audio_segment.export(raw_io, format="s16le")
         raw_pcm = raw_io.getvalue()
         
-        logger.info(f"Audio TTS généré : {len(raw_pcm)} bytes")
+        logger.info(f"Audio TTS (Israélien) généré : {len(raw_pcm)} bytes")
         
         chunk_size = 320
         for i in range(0, len(raw_pcm), chunk_size):
@@ -210,7 +230,13 @@ async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamW
                         "content": result
                     })
                 elif tool_call.function.name == "order_taxi":
-                    result = internal_order_taxi(args.get("destination"), caller_number)
+                    result = internal_order_taxi(
+                        args.get("origin_city"),
+                        args.get("origin_address"),
+                        args.get("destination_city"),
+                        args.get("destination_address"),
+                        caller_number
+                    )
                     chat_history.append(message)
                     chat_history.append({
                         "tool_call_id": tool_call.id,
