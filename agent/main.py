@@ -41,7 +41,7 @@ SYSTEM_PROMPT = """אתה מוקדן שירות במוקד Leader Taxi.
 2. שאל "ולאן היעד?" (עיר ורחוב).
 אל תבזבז זמן על שיחות חולין.
 חשוב מאוד: כשאתה מעביר את שם הרחוב לכלי 'order_taxi', הקפד לתקן שגיאות כתיב נפוצות שנובעות מזיהוי קולי. למשל, במקום "שפירה" כתוב "שפירא", במקום "הביטיחות" כתוב "הבטיחות". כתוב את שם הרחוב התקין ביותר שאתה מכיר.
-ברגע שיש לך את כל הפרטים (מוצא ויעד), השתמש בכלי 'order_taxi' כדי לבצע את ההזמנה וסיים את השיחה באישור קצר."""
+ברגע שיש לך את כל הפרטים (מוצא ויעד), השתמש בכלי 'order_taxi' כדי לבצע את ההזמנה. לעולם אל תפעיל את הכלי לפני שיש לך גם את כתובת האיסוף וגם את כתובת היעד במלואן. סיים את השיחה באישור קצר."""
 # --- OUTILS MÉTIER (TOOLS) ---
 
 def internal_check_pharmacy_stock(medicine_name: str, city_name: str = "Jérusalem"):
@@ -208,20 +208,21 @@ async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamW
             model="gpt-4o-mini",
             messages=chat_history,
             tools=TOOLS_DEFINITION,
-            tool_choice="auto"
+            tool_choice="auto",
+            parallel_tool_calls=False
         )
         
         message = response.choices[0].message
         
         # Gestion des appels d'outils
         if message.tool_calls:
+            chat_history.append(message)
             for tool_call in message.tool_calls:
                 args = json.loads(tool_call.function.arguments)
                 logger.info(f"Appel outil {tool_call.function.name} avec {args}")
                 
                 if tool_call.function.name == "check_pharmacy_stock":
                     result = internal_check_pharmacy_stock(args.get("medicine_name"), args.get("city_name", "Jérusalem"))
-                    chat_history.append(message)
                     chat_history.append({
                         "tool_call_id": tool_call.id,
                         "role": "tool",
@@ -236,7 +237,6 @@ async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamW
                         args.get("destination_address"),
                         caller_number
                     )
-                    chat_history.append(message)
                     chat_history.append({
                         "tool_call_id": tool_call.id,
                         "role": "tool",
