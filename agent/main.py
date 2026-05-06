@@ -148,9 +148,10 @@ def compute_rms(pcm_data: bytes) -> float:
 async def send_tts(text: str, writer: asyncio.StreamWriter):
     """Génère le TTS avec un accent israélien natif (edge-tts) et l'envoie via AudioSocket."""
     try:
-        # Utilisation de edge-tts pour un accent hébreu natif parfait (sans accent étranger)
+        # Utilisation de edge-tts avec réglages pour une voix plus dynamique et moins monotone
         VOICE = "he-IL-HilaNeural" 
-        communicate = edge_tts.Communicate(text, VOICE)
+        # Augmentation de la vitesse (+10%) et léger ajustement du ton pour plus de naturel
+        communicate = edge_tts.Communicate(text, VOICE, rate="+10%", pitch="+2Hz")
         
         # On récupère l'audio en mémoire
         audio_data = b""
