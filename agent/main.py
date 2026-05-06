@@ -283,12 +283,31 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
                 import uuid
                 call_id_obj = uuid.UUID(bytes=payload)
                 call_id_str = str(call_id_obj)
-                # L'UUID a été formaté avec le numéro à la fin
-                num = call_id_str.split("-")[-1].lstrip("0")
-                if num:
-                    caller_number = num
-                logger.info(f"Appel reçu, UUID: {call_id_str}, Numéro: {caller_number}")
                 
+                # Extraction multi-tenant
+                # UUID format: [DID]-2222-3333-4444-[CALLER]
+                parts = call_id_str.split("-")
+                did_part = parts[0].lstrip("0")
+                caller_number = parts[-1].lstrip("0")
+                
+                logger.info(f"Appel reçu - DID: {did_part}, Client: {caller_number}")
+                
+                # Identification de l'agence (Tenant)
+                agency_name = "Leader Real Estate"
+                tenant_prompt = ""
+                
+                try:
+                    # Recherche du tenant par son DID
+                    tenant = db["tenants"].find_one({"did": {"$regex": f"{did_part}$"}})
+                    if tenant:
+                        agency_name = tenant.get("name", agency_name)
+                        logger.info(f"Agence identifiée : {agency_name}")
+                        # On pourrait aussi charger un prompt spécifique ici s'il existe
+                        # tenant_prompt = tenant.get("systemPrompt", "")
+                except Exception as db_e:
+                    logger.error(f"Erreur lookup tenant: {db_e}")
+
+                chat_history[0]["content"] += f"\nTu es l'assistant de l'agence : {agency_name}."
                 chat_history[0]["content"] += f"\nLe numéro de téléphone du client appelant est : {caller_number}."
                 
                 # Greeting in Hebrew

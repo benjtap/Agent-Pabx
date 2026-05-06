@@ -1,0 +1,55 @@
+La réponse est NON, tu n'as absolument pas besoin du forfait à 14,95 $/mois.
+
+Voici pourquoi :
+
+Le forfait à 14,95 $ est pour leur "Cloud PBX" : C'est un système tout fait pour ceux qui n'ont pas de serveur. Il permet de créer des menus (IVR), des files d'attente, etc.
+Tu as déjà Asterisk : Comme tu utilises ton propre serveur Asterisk, c'est lui qui joue le rôle du PBX. Asterisk fait tout ce que fait le forfait à 14,95 $, mais gratuitement.
+Ce dont tu as besoin uniquement : Tu as juste besoin d'acheter le numéro virtuel (DID). Pour Israël, cela coûte généralement entre 2,95 $ et 4,00 $ par mois.
+Ce que tu dois faire sur le site FlyNumber :
+Choisis ton numéro Israël.
+Sélectionne l'option de redirection : "Forward to VoIP/SIP".
+Entre l'adresse IP de ton serveur Asterisk.
+Refuse l'option "Add Phone System" à 14,95 $.
+Résultat : Ta facture fixe sera de seulement ~$3/mois au lieu de ~$18/mois. C'est tout l'intérêt d'utiliser Asterisk avec le mix Telnyx !
+FlyNumber Telnyx
+
+Est-ce que c'est plus clair pour toi ? Tu peux maintenant prendre uniquement le numéro sans l'option Phone System.
+
+telnyx 9000Matan0t! yourcontact@entreprenariat-beni.com
+
+Côté Zadarma, c'est très simple car vous avez déjà un compte configuré (j'ai vu vos anciens identifiants 563366-100 dans vos fichiers).
+
+Voici les 3 étapes à faire sur leur site :
+
+1. Vérifier votre compte SIP
+Connectez-vous sur Zadarma.com.
+Allez dans "Paramètres" -> "Connexion SIP".
+Vérifiez que votre identifiant (ex: 563366-100) est bien "Actif".
+Notez le mot de passe (si vous l'avez oublié, vous pouvez le changer ici).
+2. Configurer le "Caller ID" (Afficher votre numéro FlyNumber)
+Pour que les gens voient votre numéro israélien quand l'IA les appelle :
+
+Allez dans "Paramètres" -> "Caller ID".
+Cliquez sur "Ajouter un numéro".
+Entrez votre numéro FlyNumber.
+Validation : Zadarma va envoyer un code ou appeler le numéro pour vérifier que c'est bien le vôtre. Comme le numéro est lié à notre serveur, vous verrez l'appel arriver dans les logs d'Asterisk pour récupérer le code.
+3. Recharger le solde (Balance)
+Allez dans "Mon compte" -> "Recharger le solde".
+Mettez 5 $ ou 10 $. C'est ce qui permettra à l'IA de passer des appels sortants.
+Pendant que vous faites cela, je vais restaurer la configuration Zadarma sur votre serveur Asterisk pour que tout soit prêt.
+
+C'est parti ?_
+
+Oui, exactement. Pour Zadarma, il vous faut un peu de crédit (Prepaid) pour que l'IA puisse passer des appels sortants (vers les chauffeurs ou les clients).
+
+Voici les deux actions à faire sur Zadarma :
+Acheter du crédit : Cliquez sur "+ RECHARGER". Un montant de 5 $ ou 10 $ est largement suffisant pour commencer (cela représente environ 3 à 6 heures d'appels vers Israël).
+Vérifier le Caller ID : C'est très important pour que vos clients voient votre numéro FlyNumber.
+Allez dans "Paramètres" -> "Caller ID".
+Ajoutez votre numéro FlyNumber.
+Zadarma vous demandera de le vérifier (soit par un code SMS, soit par un appel automatique).
+Note : Sans crédit, l'IA pourra recevoir des appels (via FlyNumber) mais elle ne pourra pas rappeler les gens ou envoyer des notifications vocales aux chauffeurs.
+
+Avez-vous réussi à récupérer votre Login et Mot de passe SIP dans la section "AJUSTER" ?_
+
+10:47 AM
