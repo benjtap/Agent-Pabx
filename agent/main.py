@@ -146,17 +146,19 @@ def compute_rms(pcm_data: bytes) -> float:
     return math.sqrt(sum_sq / count)
 
 async def send_tts(text: str, writer: asyncio.StreamWriter):
-    """Génère le TTS avec un accent israélien natif (edge-tts) et l'envoie via AudioSocket."""
+    """Génère le TTS avec OpenAI pour une qualité humaine premium (HD) et l'envoie via AudioSocket."""
     try:
-        # Utilisation de edge-tts pour un accent hébreu natif sans accent américain
-        VOICE = "he-IL-AvriNeural" # "he-IL-HilaNeural" pour une voix féminine
-        communicate = edge_tts.Communicate(text, VOICE)
+        # Utilisation d'OpenAI TTS pour une voix beaucoup plus naturelle et humaine
+        # Choix de voix : alloy, echo, fable, onyx, nova, shimmer
+        response = await client.audio.speech.create(
+            model="tts-1",
+            voice="alloy", # 'alloy' est très équilibré et humain
+            input=text,
+            response_format="mp3"
+        )
         
         # On récupère l'audio en mémoire
-        audio_data = b""
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data += chunk["data"]
+        audio_data = response.content
 
         # Conversion via pydub pour correspondre au format AudioSocket (8000Hz, Mono, S16LE)
         audio_segment = pydub.AudioSegment.from_mp3(io.BytesIO(audio_data))
@@ -166,7 +168,7 @@ async def send_tts(text: str, writer: asyncio.StreamWriter):
         audio_segment.export(raw_io, format="s16le")
         raw_pcm = raw_io.getvalue()
         
-        logger.info(f"Audio TTS (Israélien) généré : {len(raw_pcm)} bytes")
+        logger.info(f"Audio TTS OpenAI (Alloy) généré : {len(raw_pcm)} bytes")
         
         chunk_size = 320
         for i in range(0, len(raw_pcm), chunk_size):
