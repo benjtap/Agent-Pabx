@@ -44,11 +44,14 @@ SYSTEM_PROMPT = """אתה מוקדן שירות במוקד Leader Taxi.
 
 חשוב מאוד: זיהוי קולי בעברית נוטה לטעויות. תקן אותן באופן אוטומטי לפני השימוש בכלי:
 - "אזון" או "אזור" או "אשזוד" -> "אשדוד".
-- "בני איש" או "ביי אהזרנה" או "ביי אה זרנה" או "אהזרנה" -> "בני עי"ש".
+- "בני איש" או "ביי אהזרנה" או "ביי אה זרנה" או "אהזרנה" או "ביילדות" -> "בני עי"ש".
 - "כאילו מושך" או "כאילו משה" -> "קרית משה".
+- "היי משה" או "חיים משה" -> "חיים משה שפירא" (אם זה נשמע כמו התחלה של רחוב).
 - "שפירה" -> "שפירא", "הביטיחות" -> "הבטיחות", "רחוב הגדוד" -> "הגדוד העברי".
 - אם שמעת שם של עיר ורחוב, גם אם הם נשמעים קצת משובשים, נסה לתקן אותם לערים ורחובות אמיתיים באזור המרכז/דרום (אשדוד, בני עי"ש, גדרה, רחובות).
 
+הנחיות נוספות:
+- אם הלקוח אמר רק רחוב (למשל "חיים משה שפירא"), שאל אותו "באיזו עיר?" לפני שאתה מנסה להזמין.
 - ברגע שיש לך את כל הפרטים (מוצא ויעד), השתמש בכלי 'order_taxi' כדי לבצע את ההזמנה.
 - אם הכלי מחזיר שגיאה (למשל שהכתובת לא נמצאה), אל תתחיל את השיחה מהתחלה! פשוט תגיד "מצטער, לא מצאתי את הכתובת [שם הכתובת], אפשר לדייק אותה?" ותמשיך משם.
 סיים את השיחה באישור קצר."""
@@ -193,7 +196,7 @@ async def send_tts(text: str, writer: asyncio.StreamWriter):
     except Exception as e:
         logger.error(f"TTS Error: {e}")
 
-async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamWriter, chat_history: list, caller_number: str):
+async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamWriter, chat_history: list, caller_number: str, caller_name: str):
     logger.info(f"Analyse audio de {len(audio_buffer)} bytes...")
     
     # 1. STT
@@ -208,7 +211,7 @@ async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamW
         transcript = await client.audio.transcriptions.create(model="whisper-1", file=wav_io, language="he")
         user_text = transcript.text
         if len(user_text.strip()) < 2: return
-        logger.info(f"User: {user_text}")
+        logger.info(f"User ({caller_name}): {user_text}")
         chat_history.append({"role": "user", "content": user_text})
     except Exception as e:
         logger.error(f"STT Error: {e}"); return
@@ -305,26 +308,25 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
                 
                 logger.info(f"Appel reçu - DID: {did_part}, Client: {caller_number}")
                 
+                # Identification du client
+                caller_name = get_caller_identity(caller_number)
+                logger.info(f"Identité identifiée : {caller_name}")
+
                 # Identification de l'agence (Tenant)
                 agency_name = "Leader Real Estate"
-                tenant_prompt = ""
-                
                 try:
-                    # Recherche du tenant par son DID
                     tenant = db["tenants"].find_one({"did": {"$regex": f"{did_part}$"}})
                     if tenant:
                         agency_name = tenant.get("name", agency_name)
                         logger.info(f"Agence identifiée : {agency_name}")
-                        # On pourrait aussi charger un prompt spécifique ici s'il existe
-                        # tenant_prompt = tenant.get("systemPrompt", "")
                 except Exception as db_e:
                     logger.error(f"Erreur lookup tenant: {db_e}")
 
                 chat_history[0]["content"] += f"\nTu es l'assistant de l'agence : {agency_name}."
-                chat_history[0]["content"] += f"\nLe numéro de téléphone du client appelant est : {caller_number}."
+                chat_history[0]["content"] += f"\nLe nom du client est : {caller_name} (numéro: {caller_number})."
                 
                 # Greeting in Hebrew
-                greeting = "מוקד לידר טקסי שלום, מאיפה לאסוף אותך ולאן היעד?"
+                greeting = f"שלום {caller_name}, מוקד {agency_name}. מאיפה לאסוף אותך ולאן היעד?"
                 chat_history.append({"role": "assistant", "content": greeting})
                 response_start_time = time.time()
                 current_response_task = asyncio.create_task(send_tts(greeting, writer))
@@ -352,7 +354,7 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
                         silence_frames += 1
                         if silence_frames > SILENCE_DURATION_FRAMES:
                             response_start_time = time.time()
-                            current_response_task = asyncio.create_task(process_audio_and_respond(bytes(audio_buffer), writer, chat_history, caller_number))
+                            current_response_task = asyncio.create_task(process_audio_and_respond(bytes(audio_buffer), writer, chat_history, caller_number, caller_name))
                             audio_buffer, is_speaking, silence_frames = bytearray(), False, 0
             elif kind_val == KIND_ERROR:
                 logger.error("Erreur reçue d'AudioSocket")
