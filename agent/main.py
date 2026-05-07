@@ -26,8 +26,8 @@ KIND_AUDIO = 0x10
 KIND_ERROR = 0xff
 
 SAMPLE_RATE = 8000
-SILENCE_THRESHOLD = 2000
-SILENCE_DURATION_FRAMES = 100
+SILENCE_THRESHOLD = 1000 # Sensibilité accrue pour ne pas couper l'utilisateur
+SILENCE_DURATION_FRAMES = 45 # Attend environ 900ms de silence réel avant de répondre
 
 # Clients
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -40,8 +40,12 @@ SYSTEM_PROMPT = """אתה מוקדן שירות במוקד Leader Taxi.
 1. שאל "מאיפה האיסוף?" (עיר ורחוב).
 2. שאל "ולאן היעד?" (עיר ורחוב).
 אל תבזבז זמן על שיחות חולין.
-חשוב מאוד: כשאתה מעביר את שם הרחוב לכלי 'order_taxi', הקפד לתקן שגיאות כתיב נפוצות שנובעות מזיהוי קולי. למשל, במקום "שפירה" כתוב "שפירא", במקום "הביטיחות" כתוב "הבטיחות". כתוב את שם הרחוב התקין ביותר שאתה מכיר.
-ברגע שיש לך את כל הפרטים (מוצא ויעד), השתמש בכלי 'order_taxi' כדי לבצע את ההזמנה. לעולם אל תפעיל את הכלי לפני שיש לך גם את כתובת האיסוף וגם את כתובת היעד במלואן. סיים את השיחה באישור קצר."""
+חשוב מאוד: כשאתה מעביר את שם הרחוב או העיר לכלי 'order_taxi', הקפד לתקן שגיאות כתיב נפוצות שנובעות מזיהוי קולי. 
+- אם שמעת "אזון" או "אזור", הכוונה היא כמעט תמיד ל-"אשדוד". וודא שאתה שולח "אשדוד".
+- במקום "שפירה" כתוב "שפירא", במקום "הביטיחות" כתוב "הבטיחות". 
+- ברגע שיש לך את כל הפרטים (מוצא ויעד), השתמש בכלי 'order_taxi' כדי לבצע את ההזמנה.
+- אם הכלי מחזיר שגיאה (למשל שהכתובת לא נמצאה), אל תתחיל את השיחה מהתחלה! פשוט תגיד "מצטער, לא מצאתי את הכתובת [שם הכתובת], אפשר לדייק אותה?" ותמשיך משם.
+סיים את השיחה באישור קצר."""
 # --- OUTILS MÉTIER (TOOLS) ---
 
 def internal_check_pharmacy_stock(medicine_name: str, city_name: str = "Jérusalem"):
@@ -321,8 +325,8 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
                 rms = compute_rms(payload)
                 if rms > SILENCE_THRESHOLD:
                     if current_response_task and not current_response_task.done():
-                        logger.info(f"Bruit ignoré pendant la réponse (RMS: {rms})")
-                        # current_response_task.cancel() # Désactivé temporairement pour éviter les coupures
+                        logger.info(f"Interruption détectée (RMS: {rms}), arrêt de la réponse en cours.")
+                        current_response_task.cancel()
                     is_speaking, silence_frames = True, 0
                     audio_buffer.extend(payload)
                 else:
