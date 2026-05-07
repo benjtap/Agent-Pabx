@@ -26,8 +26,8 @@ KIND_AUDIO = 0x10
 KIND_ERROR = 0xff
 
 SAMPLE_RATE = 8000
-SILENCE_THRESHOLD = 1000 # Sensibilité accrue pour ne pas couper l'utilisateur
-SILENCE_DURATION_FRAMES = 45 # Attend environ 900ms de silence réel avant de répondre
+SILENCE_THRESHOLD = 1500 # Équilibre entre détection de voix et rejet du bruit
+SILENCE_DURATION_FRAMES = 45 # Blanc de ~900ms avant de répondre
 
 # Clients
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -268,8 +268,9 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
     logger.info("NOUVEL APPEL RECU")
     
     chat_history = [{"role": "system", "content": SYSTEM_PROMPT}]
-    audio_buffer, silence_frames, is_speaking = bytearray(), 0, False
+    audio_buffer, silence_frames, noise_frames, is_speaking = bytearray(), 0, 0, False
     current_response_task = None
+    response_start_time = 0
     caller_number = "Inconnu"
     
     try:
@@ -286,6 +287,7 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
                 
             if kind_val == KIND_ID:
                 import uuid
+                import time
                 call_id_obj = uuid.UUID(bytes=payload)
                 call_id_str = str(call_id_obj)
                 
@@ -318,22 +320,32 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
                 # Greeting in Hebrew
                 greeting = "מוקד לידר טקסי שלום, מאיפה לאסוף אותך ולאן היעד?"
                 chat_history.append({"role": "assistant", "content": greeting})
-                asyncio.create_task(send_tts(greeting, writer))
+                response_start_time = time.time()
+                current_response_task = asyncio.create_task(send_tts(greeting, writer))
                 continue
                 
             if kind_val == KIND_AUDIO:
+                import time
                 rms = compute_rms(payload)
                 if rms > SILENCE_THRESHOLD:
-                    if current_response_task and not current_response_task.done():
-                        logger.info(f"Interruption détectée (RMS: {rms}), arrêt de la réponse en cours.")
-                        current_response_task.cancel()
-                    is_speaking, silence_frames = True, 0
+                    noise_frames += 1
+                    # On ne considère que c'est de la parole que si on a au moins 3 frames (>60ms)
+                    if noise_frames >= 3:
+                        if current_response_task and not current_response_task.done():
+                            # Fenêtre de protection de 500ms pour éviter l'auto-coupure (écho)
+                            if time.time() - response_start_time > 0.5:
+                                logger.info(f"Interruption confirmée (RMS: {rms}), arrêt de la réponse.")
+                                current_response_task.cancel()
+                                current_response_task = None
+                        is_speaking, silence_frames = True, 0
                     audio_buffer.extend(payload)
                 else:
+                    noise_frames = 0
                     if is_speaking:
                         audio_buffer.extend(payload)
                         silence_frames += 1
                         if silence_frames > SILENCE_DURATION_FRAMES:
+                            response_start_time = time.time()
                             current_response_task = asyncio.create_task(process_audio_and_respond(bytes(audio_buffer), writer, chat_history, caller_number))
                             audio_buffer, is_speaking, silence_frames = bytearray(), False, 0
             elif kind_val == KIND_ERROR:
