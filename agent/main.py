@@ -26,8 +26,9 @@ KIND_AUDIO = 0x10
 KIND_ERROR = 0xff
 
 SAMPLE_RATE = 8000
-SILENCE_THRESHOLD = 1500 # Équilibre entre détection de voix et rejet du bruit
-SILENCE_DURATION_FRAMES = 45 # Blanc de ~900ms avant de répondre
+SILENCE_THRESHOLD = 2200 # Équilibre entre détection de voix et rejet du bruit
+SILENCE_DURATION_FRAMES = 50 # Blanc de ~1s avant de répondre
+INTERRUPTION_FRAMES = 10 # ~200ms de voix continue avant de couper le bot
 
 # Clients
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -40,9 +41,14 @@ SYSTEM_PROMPT = """אתה מוקדן שירות במוקד Leader Taxi.
 1. שאל "מאיפה האיסוף?" (עיר ורחוב).
 2. שאל "ולאן היעד?" (עיר ורחוב).
 אל תבזבז זמן על שיחות חולין.
-חשוב מאוד: כשאתה מעביר את שם הרחוב או העיר לכלי 'order_taxi', הקפד לתקן שגיאות כתיב נפוצות שנובעות מזיהוי קולי. 
-- אם שמעת "אזון" או "אזור", הכוונה היא כמעט תמיד ל-"אשדוד". וודא שאתה שולח "אשדוד".
-- במקום "שפירה" כתוב "שפירא", במקום "הביטיחות" כתוב "הבטיחות". 
+
+חשוב מאוד: זיהוי קולי בעברית נוטה לטעויות. תקן אותן באופן אוטומטי לפני השימוש בכלי:
+- "אזון" או "אזור" או "אשזוד" -> "אשדוד".
+- "בני איש" או "ביי אהזרנה" או "ביי אה זרנה" או "אהזרנה" -> "בני עי"ש".
+- "כאילו מושך" או "כאילו משה" -> "קרית משה".
+- "שפירה" -> "שפירא", "הביטיחות" -> "הבטיחות", "רחוב הגדוד" -> "הגדוד העברי".
+- אם שמעת שם של עיר ורחוב, גם אם הם נשמעים קצת משובשים, נסה לתקן אותם לערים ורחובות אמיתיים באזור המרכז/דרום (אשדוד, בני עי"ש, גדרה, רחובות).
+
 - ברגע שיש לך את כל הפרטים (מוצא ויעד), השתמש בכלי 'order_taxi' כדי לבצע את ההזמנה.
 - אם הכלי מחזיר שגיאה (למשל שהכתובת לא נמצאה), אל תתחיל את השיחה מהתחלה! פשוט תגיד "מצטער, לא מצאתי את הכתובת [שם הכתובת], אפשר לדייק אותה?" ותמשיך משם.
 סיים את השיחה באישור קצר."""
@@ -329,8 +335,8 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
                 rms = compute_rms(payload)
                 if rms > SILENCE_THRESHOLD:
                     noise_frames += 1
-                    # On ne considère que c'est de la parole que si on a au moins 3 frames (>60ms)
-                    if noise_frames >= 3:
+                    # On ne considère que c'est de la parole que si on a au moins X frames
+                    if noise_frames >= INTERRUPTION_FRAMES:
                         if current_response_task and not current_response_task.done():
                             # Fenêtre de protection de 500ms pour éviter l'auto-coupure (écho)
                             if time.time() - response_start_time > 0.5:
@@ -358,6 +364,8 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
     except (ConnectionResetError, BrokenPipeError):
         logger.error("ERREUR Pipeline: Connection lost")
     finally:
+        if current_response_task and not current_response_task.done():
+            current_response_task.cancel()
         writer.close()
 
 async def main():
