@@ -52,7 +52,9 @@ SYSTEM_PROMPT = """אתה מוקדן שירות במוקד Leader Taxi.
 
 הנחיות נוספות:
 - אם הלקוח אמר רק רחוב (למשל "חיים משה שפירא"), שאל אותו "באיזו עיר?" לפני שאתה מנסה להזמין.
-- ברגע שיש לך את כל הפרטים (מוצא ויעד), השתמש בכלי 'order_taxi' כדי לבצע את ההזמנה.
+- אל תנחש כתובות. אם הלקוח אמר משהו לא ברור, בקש ממנו לחזור שוב.
+- לפני הפעלת הכלי, ודא תמיד את הכתובת מול הלקוח (למשל: "אז רק כדי לוודא, לאסוף אותך מ[רחוב] ב[עיר]?").
+- ברגע שיש לך את כל הפרטים (מוצא ויעד) וקיבלת אישור, השתמש בכלי 'order_taxi' כדי לבצע את ההזמנה.
 - אם הכלי מחזיר שגיאה (למשל שהכתובת לא נמצאה), אל תתחיל את השיחה מהתחלה! פשוט תגיד "מצטער, לא מצאתי את הכתובת [שם הכתובת], אפשר לדייק אותה?" ותמשיך משם.
 סיים את השיחה באישור קצר."""
 # --- OUTILS MÉTIER (TOOLS) ---
@@ -138,9 +140,9 @@ TOOLS_DEFINITION = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "origin_city": {"type": "string", "description": "La ville de départ (ex: Ashdod, Jérusalem)."},
+                    "origin_city": {"type": "string", "description": "La ville de départ. Doit être une ville existante en Israël (ex: אשדוד, בני עיש, קרית מלאכי). N'invente pas de noms de villes."},
                     "origin_address": {"type": "string", "description": "L'adresse précise de départ."},
-                    "destination_city": {"type": "string", "description": "La ville de destination."},
+                    "destination_city": {"type": "string", "description": "La ville de destination. Doit être une ville existante en Israël. N'invente pas de noms de villes."},
                     "destination_address": {"type": "string", "description": "L'adresse précise de destination."}
                 },
                 "required": ["origin_city", "origin_address", "destination_city", "destination_address"]
@@ -199,6 +201,11 @@ async def send_tts(text: str, writer: asyncio.StreamWriter):
 async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamWriter, chat_history: list, caller_number: str, caller_name: str):
     logger.info(f"Analyse audio de {len(audio_buffer)} bytes...")
     
+    # Nettoyage de l'historique pour éviter les hallucinations dues à un contexte trop long
+    if len(chat_history) > 15:
+        # On garde le prompt système (index 0) et les 10 derniers messages
+        chat_history[:] = [chat_history[0]] + chat_history[-10:]
+    
     # 1. STT
     wav_io = io.BytesIO()
     with wave.open(wav_io, 'wb') as wav_file:
@@ -208,7 +215,12 @@ async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamW
     wav_io.seek(0)
     
     try:
-        transcript = await client.audio.transcriptions.create(model="whisper-1", file=wav_io, language="he")
+        transcript = await client.audio.transcriptions.create(
+            model="whisper-1", 
+            file=wav_io, 
+            language="he",
+            prompt="אשדוד, בני עיש, קרית משה, חיים משה שפירא, ירושלים, תל אביב, רחובות, גדרה"
+        )
         user_text = transcript.text
         if len(user_text.strip()) < 2: return
         logger.info(f"User ({caller_name}): {user_text}")
