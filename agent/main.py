@@ -198,7 +198,7 @@ async def send_tts(text: str, writer: asyncio.StreamWriter):
     except Exception as e:
         logger.error(f"TTS Error: {e}")
 
-async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamWriter, chat_history: list, caller_number: str, caller_name: str):
+async def process_audio_and_respond(audio_buffer: bytes, chat_history: list, caller_number: str, caller_name: str):
     logger.info(f"Analyse audio de {len(audio_buffer)} bytes...")
     
     # Nettoyage de l'historique pour éviter les hallucinations dues à un contexte trop long
@@ -281,8 +281,8 @@ async def process_audio_and_respond(audio_buffer: bytes, writer: asyncio.StreamW
     except Exception as e:
         logger.error(f"LLM Error: {e}"); bot_text = "מצטער, חלה שגיאה."
 
-    # 3. TTS
-    await send_tts(bot_text, writer)
+    # 3. On retourne le texte pour le TTS
+    return bot_text
 
 async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     addr = writer.get_extra_info('peername')
@@ -293,6 +293,24 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
     current_response_task = None
     response_start_time = 0
     caller_number = "Inconnu"
+    
+    bot_state = {"is_thinking": False, "is_speaking": False}
+    last_processed_buffer = bytearray()
+    
+    async def pipeline(audio_data):
+        bot_state["is_thinking"] = True
+        bot_state["is_speaking"] = False
+        try:
+            bot_text = await process_audio_and_respond(audio_data, chat_history, caller_number, caller_name)
+            if not bot_text: return
+            bot_state["is_thinking"] = False
+            bot_state["is_speaking"] = True
+            await send_tts(bot_text, writer)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            bot_state["is_thinking"] = False
+            bot_state["is_speaking"] = False
     
     try:
         while True:
@@ -341,7 +359,15 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
                 greeting = f"שלום {caller_name}, מוקד {agency_name}. מאיפה לאסוף אותך ולאן היעד?"
                 chat_history.append({"role": "assistant", "content": greeting})
                 response_start_time = time.time()
-                current_response_task = asyncio.create_task(send_tts(greeting, writer))
+                bot_state["is_speaking"] = True
+                
+                async def play_greeting():
+                    try:
+                        await send_tts(greeting, writer)
+                    finally:
+                        bot_state["is_speaking"] = False
+                        
+                current_response_task = asyncio.create_task(play_greeting())
                 continue
                 
             if kind_val == KIND_AUDIO:
@@ -354,9 +380,15 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
                         if current_response_task and not current_response_task.done():
                             # Fenêtre de protection de 500ms pour éviter l'auto-coupure (écho)
                             if time.time() - response_start_time > 0.5:
-                                logger.info(f"Interruption confirmée (RMS: {rms}), arrêt de la réponse.")
+                                logger.info(f"Interruption confirmée (RMS: {rms}), arrêt de la réponse. Thinking: {bot_state['is_thinking']}")
                                 current_response_task.cancel()
                                 current_response_task = None
+                                
+                                # Si le bot était en train de réfléchir (STT/LLM), on récupère l'audio précédent
+                                # pour ne pas perdre le début de la phrase de l'utilisateur !
+                                if bot_state["is_thinking"]:
+                                    audio_buffer = last_processed_buffer + audio_buffer
+                                last_processed_buffer = bytearray()
                         is_speaking, silence_frames = True, 0
                     audio_buffer.extend(payload)
                 else:
@@ -366,7 +398,8 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
                         silence_frames += 1
                         if silence_frames > SILENCE_DURATION_FRAMES:
                             response_start_time = time.time()
-                            current_response_task = asyncio.create_task(process_audio_and_respond(bytes(audio_buffer), writer, chat_history, caller_number, caller_name))
+                            last_processed_buffer = bytearray(audio_buffer)
+                            current_response_task = asyncio.create_task(pipeline(bytes(audio_buffer)))
                             audio_buffer, is_speaking, silence_frames = bytearray(), False, 0
             elif kind_val == KIND_ERROR:
                 logger.error("Erreur reçue d'AudioSocket")
