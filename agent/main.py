@@ -47,7 +47,7 @@ SYSTEM_PROMPT = """אתה מוקדן שירות במוקד Leader Taxi.
 שלב 2: אימות (חובה!)
 לאחר קבלת שתי הכתובות, עליך לחזור עליהן באוזני הלקוח ולבקש אישור מפורש:
 "אני מסכם: איסוף מ[כתובת מוצא] ל[כתובת יעד]. זה נכון?"
-- אם הלקוח עונה בחיוב ("כן", "בדיוק", "נכון", "סבבה", "זהו"): עליך לקרוא מיד לפונקציה 'confirmer_course' כדי לבצע את ההזמנה בפועל.
+- אם הלקוח עונה בחיוב ("כן", "נכון", "בסדר", "בדיוק", "סבבה", "זהו", או כל מילה נרדפת): עליך לקרוא מיד לפונקציה 'confirmer_course' כדי לבצע את ההזמנה בפועל.
 - אם הלקוח עונה בשלילה ("לא", "טעות"): עליך לקרוא לפונקציה 'annuler_ou_recommencer' ולבקש מהלקוח לתקן את הכתובת.
 
 לעולם אל תקרא לפונקציה 'confirmer_course' לפני שעשית סיכום וקיבלת אישור מפורש!
@@ -240,6 +240,7 @@ async def send_tts(text: str, writer: asyncio.StreamWriter):
 
 async def process_audio_and_respond(audio_buffer: bytes, chat_history: list, caller_number: str, caller_name: str):
     logger.info(f"Analyse audio de {len(audio_buffer)} bytes...")
+    should_hangup = False
     
     # Nettoyage de l'historique pour éviter les hallucinations dues à un contexte trop long
     if len(chat_history) > 15:
@@ -306,6 +307,7 @@ async def process_audio_and_respond(audio_buffer: bytes, chat_history: list, cal
                         "content": "Adresses enregistrées en mémoire. Tu dois maintenant impérativement demander à l'utilisateur de confirmer ces adresses de manière claire."
                     })
                 elif tool_call.function.name == "confirmer_course":
+                    should_hangup = True
                     result = internal_order_taxi(
                         args.get("origin_city"),
                         args.get("origin_address"),
@@ -339,7 +341,7 @@ async def process_audio_and_respond(audio_buffer: bytes, chat_history: list, cal
         logger.error(f"LLM Error: {e}"); bot_text = "מצטער, חלה שגיאה."
 
     # 3. On retourne le texte pour le TTS
-    return bot_text
+    return bot_text, should_hangup
 
 async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     addr = writer.get_extra_info('peername')
@@ -358,11 +360,19 @@ async def handle_audiosocket(reader: asyncio.StreamReader, writer: asyncio.Strea
         bot_state["is_thinking"] = True
         bot_state["is_speaking"] = False
         try:
-            bot_text = await process_audio_and_respond(audio_data, chat_history, caller_number, caller_name)
+            bot_text, should_hangup = await process_audio_and_respond(audio_data, chat_history, caller_number, caller_name)
             if not bot_text: return
             bot_state["is_thinking"] = False
             bot_state["is_speaking"] = True
             await send_tts(bot_text, writer)
+            if should_hangup:
+                logger.info("Fin du process, on raccroche l'appel.")
+                try:
+                    writer.write(struct.pack(">BH", KIND_HANGUP, 0))
+                    await writer.drain()
+                except Exception:
+                    pass
+                writer.close()
         except asyncio.CancelledError:
             pass
         finally:
