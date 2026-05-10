@@ -26,9 +26,9 @@ KIND_AUDIO = 0x10
 KIND_ERROR = 0xff
 
 SAMPLE_RATE = 8000
-SILENCE_THRESHOLD = 2200 # Équilibre entre détection de voix et rejet du bruit
+SILENCE_THRESHOLD = 1500 # Abaissé pour capter les mots très courts comme 'כן'
 SILENCE_DURATION_FRAMES = 50 # Blanc de ~1s avant de répondre
-INTERRUPTION_FRAMES = 10 # ~200ms de voix continue avant de couper le bot
+INTERRUPTION_FRAMES = 5 # Abaissé à ~100ms de voix continue avant de couper le bot
 
 # Clients
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -101,6 +101,31 @@ def get_caller_identity(phone: str):
         return contact.get("name", "client")
     return "client"
 
+def internal_verify_address(city_name: str, street_name: str):
+    """Vérifie si une rue existe dans une ville via l'API Nominatim."""
+    try:
+        clean_street = street_name.replace("רחוב", "").strip()
+        import re
+        clean_street_no_num = re.sub(r'\d+', '', clean_street).strip()
+        
+        url = "https://nominatim.openstreetmap.org/search"
+        params = {
+            "street": clean_street_no_num,
+            "city": city_name,
+            "country": "Israel",
+            "format": "json"
+        }
+        headers = {"User-Agent": "LeaderTaxiAgent/1.0"}
+        r = requests.get(url, params=params, headers=headers, timeout=5)
+        res = r.json()
+        if len(res) > 0:
+            return f"L'adresse {street_name} existe bien à {city_name}."
+        else:
+            return f"Je n'ai pas trouvé l'adresse {street_name} à {city_name}. Demande à l'utilisateur s'il est sûr de l'adresse ou s'il y a une erreur."
+    except Exception as e:
+        logger.error(f"Erreur vérification adresse: {e}")
+        return "Impossible de vérifier l'adresse pour le moment."
+
 def internal_order_taxi(origin_city: str, origin_address: str, destination_city: str, destination_address: str, caller_number: str):
     """Appelle l'API LeaderAPI pour créer une requête de taxi et déclencher le scoring."""
     try:
@@ -138,6 +163,21 @@ TOOLS_DEFINITION = [
                     "city_name": {"type": "string", "description": "La ville (ex: Jérusalem, Ashdod)"}
                 },
                 "required": ["medicine_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "verifier_adresse",
+            "description": "Vérifie si une rue/adresse existe dans une ville donnée. À utiliser si l'utilisateur demande explicitement de vérifier une adresse.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city_name": {"type": "string", "description": "La ville."},
+                    "street_name": {"type": "string", "description": "Le nom de la rue à vérifier."}
+                },
+                "required": ["city_name", "street_name"]
             }
         }
     },
@@ -297,6 +337,14 @@ async def process_audio_and_respond(audio_buffer: bytes, chat_history: list, cal
                         "tool_call_id": tool_call.id,
                         "role": "tool",
                         "name": "check_pharmacy_stock",
+                        "content": result
+                    })
+                elif tool_call.function.name == "verifier_adresse":
+                    result = internal_verify_address(args.get("city_name"), args.get("street_name"))
+                    chat_history.append({
+                        "tool_call_id": tool_call.id,
+                        "role": "tool",
+                        "name": "verifier_adresse",
                         "content": result
                     })
                 elif tool_call.function.name == "enregistrer_adresses":
