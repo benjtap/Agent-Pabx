@@ -37,10 +37,20 @@ db = mongo_client["leader_db"]
 
 SYSTEM_PROMPT = """אתה מוקדן שירות במוקד Leader Taxi. 
 עליך להיות מקצועי, ענייני ומהיר מאוד. הלקוחות רוצים להזמין מונית במינימום זמן.
-פעל לפי השלבים הבאים:
-1. שאל "מאיפה האיסוף?" (עיר ורחוב).
-2. שאל "ולאן היעד?" (עיר ורחוב).
-אל תבזבז זמן על שיחות חולין.
+חשוב: עבודתך מתבצעת בשני שלבים.
+
+שלב 1: איסוף נתונים
+- שאל "מאיפה האיסוף?" (עיר ורחוב).
+- שאל "ולאן היעד?" (עיר ורחוב).
+השתמש בפונקציה 'enregistrer_adresses' כדי לשמור את הכתובות שזיהית. אל תשאל לאישור לפני שיש לך את שתי הכתובות המלאות.
+
+שלב 2: אימות (חובה!)
+לאחר קבלת שתי הכתובות, עליך לחזור עליהן באוזני הלקוח ולבקש אישור מפורש:
+"אני מסכם: איסוף מ[כתובת מוצא] ל[כתובת יעד]. זה נכון?"
+- אם הלקוח עונה בחיוב ("כן", "בדיוק", "נכון", "סבבה", "זהו"): עליך לקרוא מיד לפונקציה 'confirmer_course' כדי לבצע את ההזמנה בפועל.
+- אם הלקוח עונה בשלילה ("לא", "טעות"): עליך לקרוא לפונקציה 'annuler_ou_recommencer' ולבקש מהלקוח לתקן את הכתובת.
+
+לעולם אל תקרא לפונקציה 'confirmer_course' לפני שעשית סיכום וקיבלת אישור מפורש!
 
 חשוב מאוד: זיהוי קולי בעברית נוטה לטעויות. תקן אותן באופן אוטומטי לפני השימוש בכלי:
 - "אזון" או "אזור" או "אשזוד" -> "אשדוד".
@@ -54,9 +64,7 @@ SYSTEM_PROMPT = """אתה מוקדן שירות במוקד Leader Taxi.
 - אם הלקוח ציין שתי כתובות (מוצא ויעד) אבל אמר את שם העיר רק פעם אחת (למשל "מחיים משה שפירא להדקל באשדוד"), הנח ששני הרחובות נמצאים באותה עיר (אשדוד). אל תשאל באיזו עיר אם אפשר להסיק זאת!
 - אם הלקוח אמר רחוב ולא ציין עיר בכלל, רק אז שאל אותו "באיזו עיר?" לפני שאתה מנסה להזמין.
 - אל תנחש כתובות. אם הלקוח אמר משהו לא ברור, בקש ממנו לחזור שוב.
-- לפני הפעלת הכלי, ודא תמיד את הכתובת מול הלקוח (למשל: "אז רק כדי לוודא, לאסוף אותך מ[רחוב] ב[עיר]?").
-- ברגע שיש לך את כל הפרטים (מוצא ויעד) וקיבלת אישור, השתמש בכלי 'order_taxi' כדי לבצע את ההזמנה.
-- אם הכלי מחזיר שגיאה (למשל שהכתובת לא נמצאה), אל תתחיל את השיחה מהתחלה! פשוט תגיד "מצטער, לא מצאתי את הכתובת [שם הכתובת], אפשר לדייק אותה?" ותמשיך משם.
+- אם הפונקציה 'confirmer_course' מחזירה שגיאה (למשל שהכתובת לא נמצאה), אל תתחיל את השיחה מהתחלה! פשוט תגיד "מצטער, לא מצאתי את הכתובת, אפשר לדייק אותה?" ותמשיך משם.
 סיים את השיחה באישור קצר."""
 # --- OUTILS MÉTIER (TOOLS) ---
 
@@ -136,17 +144,48 @@ TOOLS_DEFINITION = [
     {
         "type": "function",
         "function": {
-            "name": "order_taxi",
-            "description": "Commande un taxi pour le client en enregistrant son point de départ et sa destination.",
+            "name": "enregistrer_adresses",
+            "description": "À appeler pour enregistrer l'adresse de départ et de destination avant de demander confirmation à l'utilisateur. Ne déclenche pas la commande.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "origin_city": {"type": "string", "description": "La ville de départ. Doit être une ville existante en Israël (ex: אשדוד, בני עיש, קרית מלאכי). N'invente pas de noms de villes."},
-                    "origin_address": {"type": "string", "description": "L'adresse précise de départ."},
-                    "destination_city": {"type": "string", "description": "La ville de destination. Doit être une ville existante en Israël. N'invente pas de noms de villes."},
-                    "destination_address": {"type": "string", "description": "L'adresse précise de destination."}
+                    "origin_city": {"type": "string", "description": "La ville de départ."},
+                    "origin_address": {"type": "string", "description": "L'adresse de départ."},
+                    "destination_city": {"type": "string", "description": "La ville de destination."},
+                    "destination_address": {"type": "string", "description": "L'adresse de destination."}
                 },
                 "required": ["origin_city", "origin_address", "destination_city", "destination_address"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "confirmer_course",
+            "description": "À appeler UNIQUEMENT lorsque l'utilisateur a explicitement confirmé les adresses (ex: 'oui', 'c'est ça', 'valide'). Cette fonction déclenche la commande finale.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "origin_city": {"type": "string", "description": "La ville de départ confirmée."},
+                    "origin_address": {"type": "string", "description": "L'adresse précise de départ confirmée."},
+                    "destination_city": {"type": "string", "description": "La ville de destination confirmée."},
+                    "destination_address": {"type": "string", "description": "L'adresse précise de destination confirmée."}
+                },
+                "required": ["origin_city", "origin_address", "destination_city", "destination_address"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "annuler_ou_recommencer",
+            "description": "À appeler si l'utilisateur infirme, veut annuler ou corriger une erreur.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "raison": {"type": "string", "description": "Pourquoi l'utilisateur veut annuler ou recommencer"}
+                },
+                "required": []
             }
         }
     }
@@ -245,7 +284,10 @@ async def process_audio_and_respond(audio_buffer: bytes, chat_history: list, cal
         if message.tool_calls:
             chat_history.append(message)
             for tool_call in message.tool_calls:
-                args = json.loads(tool_call.function.arguments)
+                try:
+                    args = json.loads(tool_call.function.arguments)
+                except Exception:
+                    args = {}
                 logger.info(f"Appel outil {tool_call.function.name} avec {args}")
                 
                 if tool_call.function.name == "check_pharmacy_stock":
@@ -256,7 +298,14 @@ async def process_audio_and_respond(audio_buffer: bytes, chat_history: list, cal
                         "name": "check_pharmacy_stock",
                         "content": result
                     })
-                elif tool_call.function.name == "order_taxi":
+                elif tool_call.function.name == "enregistrer_adresses":
+                    chat_history.append({
+                        "tool_call_id": tool_call.id,
+                        "role": "tool",
+                        "name": "enregistrer_adresses",
+                        "content": "Adresses enregistrées en mémoire. Tu dois maintenant impérativement demander à l'utilisateur de confirmer ces adresses de manière claire."
+                    })
+                elif tool_call.function.name == "confirmer_course":
                     result = internal_order_taxi(
                         args.get("origin_city"),
                         args.get("origin_address"),
@@ -267,8 +316,15 @@ async def process_audio_and_respond(audio_buffer: bytes, chat_history: list, cal
                     chat_history.append({
                         "tool_call_id": tool_call.id,
                         "role": "tool",
-                        "name": "order_taxi",
+                        "name": "confirmer_course",
                         "content": result
+                    })
+                elif tool_call.function.name == "annuler_ou_recommencer":
+                    chat_history.append({
+                        "tool_call_id": tool_call.id,
+                        "role": "tool",
+                        "name": "annuler_ou_recommencer",
+                        "content": "Annulation prise en compte. Demande à l'utilisateur de préciser les bonnes adresses."
                     })
             
             # Deuxième passage pour générer la réponse finale
