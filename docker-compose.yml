@@ -10,9 +10,10 @@ services:
       - ./asterisk/config/pjsip.conf:/etc/asterisk/pjsip.conf
       - ./asterisk/config/extensions.conf:/etc/asterisk/extensions.conf
       - ./asterisk/sounds:/var/lib/asterisk/sounds
+      - ./asterisk/outgoing:/var/spool/asterisk/outgoing
     restart: unless-stopped
 
-  # Backend IA Python (Agent Vocal)
+  # Backend IA Python (Agent Vocal - Inbound)
   voice_agent:
     build: ./agent
     container_name: pabx_voice_agent
@@ -23,6 +24,19 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - MONGO_URI=${MONGO_URI:-}
-      - STT_PROVIDER=openai  # ou google, etc.
-      - TTS_PROVIDER=openai  # ou gtts, elevenlabs, etc.
+      - STT_PROVIDER=openai
+      - TTS_PROVIDER=openai
+    restart: unless-stopped
+
+  # Worker pour les appels sortants (Outbound Call Queue)
+  call_worker:
+    build: ./agent
+    container_name: pabx_call_worker
+    network_mode: "host"
+    command: python call_worker.py
+    volumes:
+      - ./agent:/app
+      - ./asterisk/outgoing:/var/spool/asterisk/outgoing
+    environment:
+      - MONGO_URI=${MONGO_URI:-}
     restart: unless-stopped
